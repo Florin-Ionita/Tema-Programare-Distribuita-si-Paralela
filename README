@@ -1,0 +1,118 @@
+Readme tema2 APD
+Prezentare generala a temei:
+ Am facut implementarea folosind un alogritm de tipul round robin care 
+mai intai intreba toate seedurile pentru cate un hash diferit si dupa intreba peer-urile. Am folosit 
+rand() ca sa nu plec mereu de la primul seed si sa plec de la oricare de aceea am facut operatia de modulo
+(int client_index = rand() % numtasks;). Acest alogritm il bagam intr-un while care se oprea atunci 
+cand toate hashurile de care avea nevoie utilizatorul erau gata.
+
+Datele si structurile de date folosite:
+typedef struct {
+    char filename[MAX_FILENAME];
+    int num_hashes;
+    // vector de marime max_chunks de hash-uri
+    char hashes[MAX_CHUNKS][HASH_SIZE + 1]; // +1 pentru ca nu am nicio idee C ul ma sperie
+} FileData;
+FileData reprezinta efectiv structura prin care este caracterizat un fisier, nume, numarul de hashuri si
+lista lor 
+
+typedef struct {
+    int num_owned_files;
+    FileData owned_files[MAX_FILES];
+    int num_desired_files;
+    // vector de nume de fisiere dorite
+    char desired_files[MAX_FILES][MAX_FILENAME];
+} ClientData;
+
+ClientData reprezinta structura prin care este caracterizat ce informatii detine un client, adica cate fisiere
+detine, lista lor, cat si cate fisiere doreste si numele lor ca sa stie de la tracker ce sa-i ceara ca sa le 
+caute hash-urile din swarm
+
+typedef struct {
+    int num_files;
+    FileData files[MAX_FILES];
+    // Pentru ca fisierele sunt numerotate, putem folosi numarul fisierului ca index
+    // Adica seeds[0] inseamna ca client1 este seed pentru fisierul 1, peers[0] este pentru fisierul 1
+    char seeds[MAX_FILES][MAX_CLIENTS];
+    char peers[MAX_FILES][MAX_CLIENTS];
+
+} Swarm;
+
+Aici la swarm am dat putin creatie, swarm-ul detine toate fisierele si doi vectori de seeds si peers. Cum functioneaza
+un vector de seeds: daca clientul numarul 1 este seed pentru fisierul 2 atunci seeds[2][1] = 1. Am folosit char ca ocupa
+mai putin spatiu, puteam folosi si bool.
+
+typedef struct {
+    // Daca type e 0 atunci e un update cand clientul inca downloadeaza, 
+    // daca e 1 atunci e un update cand clientul a terminat de downloadat
+    int type;
+    // Daca a terminat de downloadat, trackerul il pune in seeds si-l scoate din peers
+    char clients[MAX_FILES][MAX_CLIENTS];
+
+} Update;
+
+Update e mai mult o structura pe care o folosesc pentru a trimite catre tracker mesaje de actualizare in care cer lista
+de seeds si peers updatata. Modul in care m-am gandit eu sa fac actualizarea era in functie de 3 situatii:
+    codul 0: trimite indexul peerului nou(adica clientul care vrea sa downloadeze fisierul), si asteapta swarmul updatat 
+    de la tracker
+    codul 1: timite indexul seedului nou(clientu a terminat de downloadat fisierul), siasteapta swarmul updatat
+    codul 2: trimite checkerului ca a terminat de downloadat toate fisierele iar da numtasks-1 de cod 2 primite, checkerul
+    stie ca a terminat toate downloadurile
+
+typedef struct { 
+    int rank;
+    int numtasks;
+    Swarm swarm;
+    int num_desired_files;
+    char desired_files[MAX_FILES][MAX_FILENAME]; 
+} DownloadArgs;
+
+Asta e o structura prin care imi dadeam eu argumentele pentru functia download_thread_func
+
+
+create_update_struct_MPI()
+create_file_struct_MPI() de asemenea pentru structuri pe care voiam sa le impart intre programe am facut datatype-uri custom
+create_swarm_struct_MPI()
+
+
+Partea clientilor:
+    Initializare:
+    1. Clientii trimit numarul de fisiere pe care le detin
+    2. Dupa trimit fisierele pe care le detin si practic este adaugat in lista de seeds
+    3. Asteapta un raspuns de la tracker ca sa inceapa download-urile, adica primeste
+    fix swarmul de la tracker
+
+    Download:
+    1. Porneste un fir de executie cu functia download_thread_func 
+    2. Intr-un for prin care trece in toate fisierele pe care le vrea la fiecare pas face
+    urmatoarele: 
+        a. Initializeaza un vector de found in cazul in care a gasit hash-ul sau nu, o variabila
+        should_update care trebuie actualizata in caz ca a gasit un hash, si un struct de 
+        Update pentru a trimite actualizarile (de mentionat ca updateurile se intampla pe tag-ul 2,
+        cererile de download pe tag-ul 0 si ack-ul il primeste pe 1 pentru ca am avut un conflict 
+        mare cu buferul si am stat 4 ore sa ma uit ca prostu de ce mi crapa codul, the more u know)
+        b. Intra intr-un while care se opreste cand toate hash-urile sunt gasite
+        c. foloseste algoritmul round robin de care am vorbit mai sus
+    3. Dupa ce iese din while, inseamna ca a downloadat fisierul deci il facem seed si scriem 
+    fisierul de out
+    4. Dupa ce iese din forul de la 2 e clar ca a downloadat toate fisierele si trimite un mesaj
+    de tip 2 catre tracker
+    
+    Update:
+    1. Sta intr-un loop infinit pana cand primeste de la tracker un hash de 32 de 0-uri care 
+    inseamna ca s-au terminat de downloadat toate fisierele
+    2. Verifica in ClientData daca are hash-ul iar in cazul in care nu-l are trimite un NACK cu 
+    valoarea 0, iar daca il are trimite un int cu val 1
+
+Partea Trackerului:
+    Initializare:
+    1. Primeste de la clienti numarul de fisiere pe care le detin
+    2. Primeste de la clienti fisierele pe care le detin si ii adauga in swarm
+    3. Dupa ce a primit informatiile de la toti clientii trimite swarmul inapoi la client
+    Actualizari:
+    1. Intr-un loop infinit primeste de la useri mesaje de tipul update cu codul 0, 1 sau 2
+    2. In cazul in care primeste un mesaj de tipul 0 sau 1, actualizeaza swarmul si trimite 
+    inapoi swarm-ul actualizat
+    3. In cazul in care primeste un mesaj de tipul 2, incrementeaza should_stop iar cand este
+    egal cu numtasks-1 trimite un mesaj catre toti clientii sa inchida threadul de update
+
